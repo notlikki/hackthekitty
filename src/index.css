@@ -1,0 +1,128 @@
+@import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Share+Tech+Mono&display=swap');
+@import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
+
+@theme {
+  --font-display: 'Fredoka', system-ui, sans-serif;
+  --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'Share Tech Mono', monospace;
+
+  --color-bg-base: #FAF6EE;
+  --color-bg-elevated: #FFFDF9;
+  --color-ink: #1E1B18;
+  --color-ink-soft: #6E665F;
+  --color-rarity-common: #9A938C;
+  --color-rarity-uncommon: #4E8C5D;
+  --color-rarity-rare: #3882B8;
+  --color-rarity-epic: #844C9C;
+  --color-rarity-legendary: #D97706;
+  --color-adopted: #0F766E;
+  --color-danger: #B91C1C;
+
+  --animate-scan: scan 2.5s linear infinite;
+  --animate-pulse-glow: pulse-glow 2.5s ease-in-out infinite;
+  --animate-float: float 4s ease-in-out infinite;
+  --animate-shake: shake 0.35s ease-in-out;
+  --animate-flash: flash 0.3s ease-out;
+}
+
+@keyframes scan {
+  0% { top: 0%; }
+  50% { top: 100%; }
+  100% { top: 0%; }
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    opacity: 0.6;
+    transform: scale(0.98);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.02);
+  }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-8px); }
+  40%, 80% { transform: translateX(8px); }
+}
+
+@keyframes flash {
+  0% { opacity: 0.95; }
+  100% { opacity: 0; }
+}
+
+:root {
+  --bg-base: #FAF6EE;
+  --bg-elevated: #FFFDF9;
+  --ink: #1E1B18;
+  --ink-soft: #6E665F;
+  --rarity-common: #9A938C;
+  --rarity-uncommon: #4E8C5D;
+  --rarity-rare: #3882B8;
+  --rarity-epic: #844C9C;
+  --rarity-legendary: #D97706;
+  --adopted: #0F766E;
+  --danger: #B91C1C;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--bg-base);
+  color: var(--ink);
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+  overflow-x: hidden;
+}
+
+/* Hide scrollbars */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Glassmorphism */
+.glass-panel {
+  background: rgba(255, 253, 249, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(30, 27, 24, 0.08);
+}
+
+.dark-glass-panel {
+  background: rgba(30, 27, 24, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* Leaflet style overrides */
+.leaflet-container {
+  border-radius: 1.5rem;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.05);
+  border: 4px solid var(--ink);
+}
+
+/* Ensure Leaflet tiles are not broken by Tailwind image resets */
+.leaflet-container img {
+  max-width: none !important;
+  max-height: none !important;
+}
+
+/* Custom interactive active state highlights */
+.active-nav-underline {
+  height: 4px;
+  border-radius: 9999px;
+  background-color: var(--ink);
+}
