@@ -336,7 +336,7 @@ export const FeedTab: React.FC<FeedTabProps> = ({
 
         {/* Real-time Object Detection HUD Overlay */}
         {scanState === 'streaming' && (
-          <div className="absolute inset-0 z-20 pointer-events-none flex flex-col items-center justify-between p-6">
+          <div className="absolute inset-0 z-20 pointer-events-none flex flex-col items-center justify-between pt-6 px-6 pb-16">
             
             {/* Top Badge: Detection Status */}
             <div className="mt-14 select-none">

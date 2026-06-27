@@ -43,7 +43,11 @@ export async function catchCat(
   existingCats: Cat[],
   uid: string
 ): Promise<CatchAPIResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/catch`, {
+  const targetUrl = `${API_BASE_URL}/api/catch`;
+  // TEMPORARY DIAGNOSTIC LOGGING - REMOVE ONCE FIXED
+  console.log("[DIAGNOSTIC] constructed API URL being hit:", targetUrl);
+  
+  const response = await fetch(targetUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -76,7 +80,11 @@ export async function feedCat(
   existingCats: Cat[],
   uid: string
 ): Promise<FeedAPIResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/feed`, {
+  const targetUrl = `${API_BASE_URL}/api/feed`;
+  // TEMPORARY DIAGNOSTIC LOGGING - REMOVE ONCE FIXED
+  console.log("[DIAGNOSTIC] constructed API URL being hit:", targetUrl);
+
+  const response = await fetch(targetUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
