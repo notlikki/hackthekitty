@@ -5,6 +5,7 @@ import { catchCat } from '../services/api';
 import type { Cat } from '../services/firebase';
 import { CatchRevealSequence } from './CatchRevealSequence';
 import { ScanLineOverlay } from './ScanLineOverlay';
+import { useLiveCatDetector } from '../hooks/useLiveCatDetector';
 
 interface SpotTabProps {
   currentUser: any;
@@ -83,6 +84,8 @@ export const SpotTab: React.FC<SpotTabProps> = ({
     xpGained: number;
     distinguishingFeatures: string;
   } | null>(null);
+
+  const { isModelLoading, status, confidence } = useLiveCatDetector(videoRef, scanState === 'streaming');
 
   useEffect(() => {
     startCamera();
@@ -338,6 +341,85 @@ export const SpotTab: React.FC<SpotTabProps> = ({
               Camera simulated for demo review. Click the shutter below to generate a stray catch.
             </p>
           </div>
+        )}
+
+        {/* Real-time Object Detection HUD Overlay */}
+        {scanState === 'streaming' && (
+          <div className="absolute inset-0 z-20 pointer-events-none flex flex-col items-center justify-between p-6">
+            
+            {/* Top Badge: Detection Status */}
+            <div className="mt-14 select-none">
+              {isModelLoading ? (
+                <div className="px-4 py-1.5 rounded-full border border-slate-700 bg-slate-900/80 text-[9px] font-mono tracking-widest uppercase backdrop-blur-sm text-slate-400 font-bold flex items-center gap-1.5 shadow-md">
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>Loading detector...</span>
+                </div>
+              ) : status === 'cat_detected' ? (
+                <div className="px-4 py-1.5 rounded-full border border-emerald-500 bg-emerald-950/85 text-[9px] font-mono tracking-widest uppercase backdrop-blur-sm text-emerald-400 font-extrabold animate-pulse shadow-md">
+                  🟢 CAT DETECTED: {Math.round((confidence || 0) * 100)}%
+                </div>
+              ) : status === 'human_detected' ? (
+                <div className="px-4 py-1.5 rounded-full border border-amber-500 bg-amber-950/85 text-[9px] font-mono tracking-widest uppercase backdrop-blur-sm text-amber-400 font-bold shadow-md">
+                  🟡 HUMAN DETECTED — AIM AT A CAT!
+                </div>
+              ) : status === 'screen_detected' ? (
+                <div className="px-4 py-1.5 rounded-full border border-orange-500 bg-orange-950/85 text-[9px] font-mono tracking-widest uppercase backdrop-blur-sm text-orange-400 font-bold shadow-md">
+                  🟠 LOOKS LIKE A SCREEN — FIND A REAL CAT!
+                </div>
+              ) : status === 'laptop_detected' ? (
+                <div className="px-4 py-1.5 rounded-full border border-orange-500 bg-orange-950/85 text-[9px] font-mono tracking-widest uppercase backdrop-blur-sm text-orange-400 font-bold shadow-md">
+                  🟠 LOOKS LIKE A LAPTOP — FIND A REAL CAT!
+                </div>
+              ) : status === 'multiple_detected' ? (
+                <div className="px-4 py-1.5 rounded-full border border-violet-500 bg-violet-950/85 text-[9px] font-mono tracking-widest uppercase backdrop-blur-sm text-violet-400 font-extrabold shadow-md">
+                  🟣 HMM, SOMETHING'S OFF — TRY A CLEARER SHOT OF JUST THE CAT
+                </div>
+              ) : (
+                <div className="px-4 py-1.5 rounded-full border border-rose-500 bg-rose-950/85 text-[9px] font-mono tracking-widest uppercase backdrop-blur-sm text-rose-400 font-bold shadow-md">
+                  🔴 NO CAT DETECTED
+                </div>
+              )}
+            </div>
+
+            {/* Bounding box target (🟢 status === 'cat_detected' only) */}
+            {!isModelLoading && status === 'cat_detected' && (
+              <div className="w-48 h-48 relative flex items-center justify-center">
+                {/* Green corner brackets */}
+                <div className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-emerald-400 rounded-tl-lg"></div>
+                <div className="absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 border-emerald-400 rounded-tr-lg"></div>
+                <div className="absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 border-emerald-400 rounded-bl-lg"></div>
+                <div className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-emerald-400 rounded-br-lg"></div>
+                
+                {/* Pulsing crosshairs */}
+                <div className="w-12 h-12 rounded-full border-2 border-emerald-400/40 bg-emerald-500/10 flex items-center justify-center animate-ping"></div>
+                <div className="w-3 h-3 rounded-full bg-emerald-400"></div>
+
+                {/* Accuracy percentage */}
+                <span className="absolute bottom-2 text-[8px] font-mono tracking-wider text-emerald-400 bg-emerald-950/70 px-2 py-0.5 rounded font-black border border-emerald-900/40 shadow-sm">
+                  CONFIDENCE: {Math.round((confidence || 0) * 100)}%
+                </span>
+              </div>
+            )}
+
+            {/* Bottom Status text indicator */}
+            <div className="text-[8px] font-mono select-none">
+              {!isModelLoading && status === 'cat_detected' ? (
+                <div className="px-3 py-1 rounded-full border border-emerald-900/50 text-emerald-400 bg-emerald-950/60 shadow-sm">
+                  LIGHTWEIGHT AI LOCK: ACTIVE
+                </div>
+              ) : (
+                <div className="px-3 py-1 rounded-full border border-slate-700 text-slate-400 bg-slate-950/60 shadow-sm">
+                  {isModelLoading ? 'INITIALIZING DETECTOR MODEL...' : 'SEARCHING FOR HEAT SIGS...'}
+                </div>
+              )}
+            </div>
+
+          </div>
+        )}
+
+        {/* Ambient Full-screen Green Glow Overlay when Cat is detected */}
+        {scanState === 'streaming' && !isModelLoading && status === 'cat_detected' && (
+          <div className="absolute inset-0 border-[8px] border-emerald-500/20 shadow-[inset_0_0_60px_rgba(16,185,129,0.35)] pointer-events-none z-15 animate-pulse" />
         )}
 
         {/* Frozen Frame View */}
