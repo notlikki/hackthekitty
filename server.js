@@ -33,6 +33,33 @@ function getDistance(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
+// Tuning Constants
+const LOCATION_REUSE_RADIUS_M = 30;
+const LOCATION_REUSE_THRESHOLD_COUNT = 3;
+const CATCH_COOLDOWN_MS = 60000;
+const FEED_COOLDOWN_MS = 43200000; // 12 hours
+
+// In-Memory Rate Limiting Maps
+const lastCatchActions = new Map(); // uid -> timestamp
+const lastFeedActions = new Map();  // `${uid}:${catId}` -> timestamp
+
+// Helper to check location abuse
+function checkLocationAbuse(uid, lat, lng, existingCats) {
+  if (!uid || !existingCats) return false;
+  const userOwnCatches = existingCats.filter(cat => cat.ownerUid === uid);
+  let closeCount = 0;
+  for (const cat of userOwnCatches) {
+    if (cat.lat && cat.lng) {
+      const dist = getDistance(lat, lng, cat.lat, cat.lng);
+      if (dist <= LOCATION_REUSE_RADIUS_M) {
+        closeCount++;
+      }
+    }
+  }
+  return closeCount >= LOCATION_REUSE_THRESHOLD_COUNT;
+}
+
+
 // Call Gemini Vision API
 async function callGeminiVision(apiKey, base64Photo, systemInstruction) {
   const base64Data = base64Photo.replace(/^data:image\/[a-z]+;base64,/, "");
@@ -125,11 +152,23 @@ function rollRarity() {
 
 // 1. CATCH ENDPOINT
 app.post('/api/catch', async (req, res) => {
-  const { photo, lat, lng, existingCats } = req.body;
+  const { photo, lat, lng, existingCats, uid } = req.body;
   const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
 
   if (!photo) {
     return res.status(400).json({ error: "Photo is required." });
+  }
+
+  // Rate Limiting check
+  if (uid) {
+    const lastCatchTime = lastCatchActions.get(uid);
+    if (lastCatchTime && (Date.now() - lastCatchTime) < CATCH_COOLDOWN_MS) {
+      const secondsLeft = Math.ceil((CATCH_COOLDOWN_MS - (Date.now() - lastCatchTime)) / 1000);
+      return res.json({
+        success: false,
+        message: `Slow down! You can catch again in ${secondsLeft} seconds.`
+      });
+    }
   }
 
   // Gemini Prompts
@@ -161,7 +200,7 @@ app.post('/api/catch', async (req, res) => {
         isLiveCapture: result.isLiveCapture,
         message: !result.isRealCat 
           ? "Hmm, that doesn't look like a real cat — try again!" 
-          : "Screens/printed photos are not allowed. Please snap a live cat непосредственно!"
+          : "Screens or printed photos aren't allowed — snap a live cat directly with your camera!"
       });
     }
 
@@ -201,6 +240,11 @@ app.post('/api/catch', async (req, res) => {
         });
       }
 
+      // Update catch action timestamp
+      if (uid) {
+        lastCatchActions.set(uid, Date.now());
+      }
+
       return res.json({
         success: true,
         action: "resight",
@@ -214,15 +258,26 @@ app.post('/api/catch', async (req, res) => {
     } else {
       // It is a new cat! Roll rarity.
       const roll = rollRarity();
+      const abuseFlag = checkLocationAbuse(uid, lat, lng, existingCats);
+      const xpAwarded = abuseFlag ? 5 : roll.xp;
+
+      // Update catch action timestamp
+      if (uid) {
+        lastCatchActions.set(uid, Date.now());
+      }
+
       return res.json({
         success: true,
         action: "catch",
-        xpAwarded: roll.xp,
+        xpAwarded,
         rarity: roll.rarity,
         breedGuess: result.breedGuess,
         distinguishingFeatures: result.distinguishingFeatures,
         suggestedNickname: result.suggestedNickname,
-        message: `Caught a new ${roll.rarity.toUpperCase()} cat! (+${roll.xp} XP)`
+        flaggedLocationReuse: abuseFlag,
+        message: abuseFlag
+          ? `Caught a new ${roll.rarity.toUpperCase()} cat! Capped at +5 XP due to location reuse.`
+          : `Caught a new ${roll.rarity.toUpperCase()} cat! (+${roll.xp} XP)`
       });
     }
   } catch (error) {
@@ -233,7 +288,7 @@ app.post('/api/catch', async (req, res) => {
 
 // 2. FEED ENDPOINT
 app.post('/api/feed', async (req, res) => {
-  const { photo, lat, lng, existingCats } = req.body;
+  const { photo, lat, lng, existingCats, uid } = req.body;
   const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
 
   if (!photo) {
@@ -265,7 +320,7 @@ app.post('/api/feed', async (req, res) => {
         isLiveCapture: result.isLiveCapture,
         message: !result.isRealCat 
           ? "Hmm, that doesn't look like a real cat — try again!" 
-          : "Screens/printed photos are not allowed. Please snap a live cat непосредственно!"
+          : "Screens or printed photos aren't allowed — snap a live cat directly with your camera!"
       });
     }
 
@@ -309,6 +364,19 @@ app.post('/api/feed', async (req, res) => {
         });
       }
 
+      // Check feed cooldown map
+      if (uid) {
+        const feedKey = `${uid}:${matchedCatId}`;
+        const lastFeedTime = lastFeedActions.get(feedKey);
+        if (lastFeedTime && (Date.now() - lastFeedTime) < FEED_COOLDOWN_MS) {
+          return res.json({
+            success: false,
+            message: "You already fed this cat recently — give it some time before feeding again."
+          });
+        }
+        lastFeedActions.set(feedKey, Date.now());
+      }
+
       return res.json({
         success: true,
         action: "feed",
@@ -319,8 +387,24 @@ app.post('/api/feed', async (req, res) => {
       });
     } else {
       // Feeding a new cat! We automatically discovery-catch it first, then feed it.
+      // Check catch rate limit
+      if (uid) {
+        const lastCatchTime = lastCatchActions.get(uid);
+        if (lastCatchTime && (Date.now() - lastCatchTime) < CATCH_COOLDOWN_MS) {
+          const secondsLeft = Math.ceil((CATCH_COOLDOWN_MS - (Date.now() - lastCatchTime)) / 1000);
+          return res.json({
+            success: false,
+            message: `Slow down! You can catch again in ${secondsLeft} seconds.`
+          });
+        }
+        lastCatchActions.set(uid, Date.now());
+      }
+
       const roll = rollRarity();
-      const combinedXP = roll.xp + 20; // discovery XP + feed XP
+      const abuseFlag = checkLocationAbuse(uid, lat, lng, existingCats);
+      const discoveryXP = abuseFlag ? 5 : roll.xp;
+      const combinedXP = discoveryXP + 20; // discovery XP + feed XP
+
       return res.json({
         success: true,
         action: "catch_and_feed",
@@ -329,7 +413,9 @@ app.post('/api/feed', async (req, res) => {
         breedGuess: "Unknown Breed", // Gemini doesn't return breed Guess in Feed prompt, default it
         distinguishingFeatures: result.matchedDistinguishingFeatures,
         suggestedNickname: "Stray Eater",
-        message: `Discovered and fed a new ${roll.rarity.toUpperCase()} cat! (+${combinedXP} XP)`
+        message: abuseFlag
+          ? `Discovered and fed a new ${roll.rarity.toUpperCase()} cat! Discovery XP capped at +5 due to location reuse. (+${combinedXP} XP total)`
+          : `Discovered and fed a new ${roll.rarity.toUpperCase()} cat! (+${combinedXP} XP)`
       });
     }
   } catch (error) {

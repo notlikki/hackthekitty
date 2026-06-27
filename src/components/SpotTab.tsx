@@ -1,6 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { RefreshCw, Sparkles, AlertCircle, Eye, Camera, Flashlight } from 'lucide-react';
+import { RefreshCw, Sparkles, AlertCircle, Eye, Camera, Flashlight, Info } from 'lucide-react';
 import { addCatchRecord } from '../services/firebase';
+import { catchCat } from '../services/api';
 import type { Cat } from '../services/firebase';
 import { CatchRevealSequence } from './CatchRevealSequence';
 import { ScanLineOverlay } from './ScanLineOverlay';
@@ -70,9 +71,9 @@ export const SpotTab: React.FC<SpotTabProps> = ({
   const [flashOverlay, setFlashOverlay] = useState<boolean>(false);
   const [flashOn, setFlashOn] = useState<boolean>(false);
 
-  // AI Cat Detector States
-  const [catDetected, setCatDetected] = useState<boolean>(false);
-  const [detectedRarity, setDetectedRarity] = useState<'common' | 'uncommon' | 'rare' | 'epic' | 'legendary'>('common');
+  // Rejection & warning states
+  const [rejectionMessage, setRejectionMessage] = useState<string>('');
+  const [locationReuseWarning, setLocationReuseWarning] = useState<boolean>(false);
 
   const [resolvedCatch, setResolvedCatch] = useState<{
     id?: string;
@@ -95,33 +96,6 @@ export const SpotTab: React.FC<SpotTabProps> = ({
       videoRef.current.srcObject = streamRef.current;
     }
   }, [isCameraLive, scanState]);
-
-  // Simulated AI Cat Detector loop (simulates scanner search and target lock)
-  useEffect(() => {
-    if (scanState !== 'streaming') {
-      setCatDetected(false);
-      return;
-    }
-
-    const interval = setInterval(() => {
-      setCatDetected((prev) => {
-        const next = !prev;
-        if (next) {
-          // Roll rarity weights: Common (45%), Uncommon (28%), Rare (15%), Epic (10%), Legendary (2%)
-          const rand = Math.random();
-          let rolled: 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary' = 'common';
-          if (rand < 0.02) rolled = 'legendary';
-          else if (rand < 0.12) rolled = 'epic';
-          else if (rand < 0.27) rolled = 'rare';
-          else if (rand < 0.55) rolled = 'uncommon';
-          setDetectedRarity(rolled);
-        }
-        return next;
-      });
-    }, 3500); // toggles detection state every 3.5s
-
-    return () => clearInterval(interval);
-  }, [scanState]);
 
   const requestLocation = () => {
     if (navigator.geolocation) {
@@ -172,17 +146,8 @@ export const SpotTab: React.FC<SpotTabProps> = ({
     }
   }
 
-  const [triggerShake, setTriggerShake] = useState<boolean>(false);
-
   const handleCapture = () => {
     if (scanState !== 'streaming') return;
-
-    if (!catDetected) {
-      // Trigger visual warning shake
-      setTriggerShake(true);
-      setTimeout(() => setTriggerShake(false), 350);
-      return;
-    }
 
     // Trigger visual snap flash
     setFlashOverlay(true);
@@ -202,8 +167,10 @@ export const SpotTab: React.FC<SpotTabProps> = ({
         stopCamera();
       }
     } else {
-      // Desktop fallback: Select a random mock image from the list based on detected rarity
-      const list = MOCK_CAT_IMAGES[detectedRarity];
+      // Desktop fallback: get mock image corresponding to a random rarity
+      const rarities: ('common' | 'uncommon' | 'rare' | 'epic' | 'legendary')[] = ['common', 'uncommon', 'rare', 'epic', 'legendary'];
+      const rolledRarity = rarities[Math.floor(Math.random() * rarities.length)];
+      const list = MOCK_CAT_IMAGES[rolledRarity];
       const randomImage = list[Math.floor(Math.random() * list.length)];
       setCapturedPhoto(randomImage);
       setScanState('captured');
@@ -213,6 +180,8 @@ export const SpotTab: React.FC<SpotTabProps> = ({
   const handleRetake = () => {
     setCapturedPhoto(null);
     setResolvedCatch(null);
+    setRejectionMessage('');
+    setLocationReuseWarning(false);
     startCamera();
   };
 
@@ -220,85 +189,70 @@ export const SpotTab: React.FC<SpotTabProps> = ({
     if (!capturedPhoto) return;
     setScanState('analyzing');
 
-    // 1.5s Mock Analysis Delay
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-
     const lat = geolocation ? geolocation.latitude : 40.7128;
     const lng = geolocation ? geolocation.longitude : -74.0060;
 
-    // Check for re-sight (25% chance if catches exist)
-    const isReSight = Math.random() < 0.25 && existingCats.length > 0;
+    try {
+      const res = await catchCat(capturedPhoto, lat, lng, existingCats, currentUser.uid);
 
-    if (isReSight) {
-      // Pick a random cat from current list
-      const matchedCat = existingCats[Math.floor(Math.random() * existingCats.length)];
-      
-      setResolvedCatch({
-        id: matchedCat.id,
-        rarity: matchedCat.rarity,
-        nickname: matchedCat.nickname,
-        breedGuess: matchedCat.breedGuess,
-        xpGained: 5,
-        distinguishingFeatures: matchedCat.distinguishingFeatures,
-      });
+      if (res.success === false) {
+        setRejectionMessage(res.message || 'Verification rejected.');
+        setScanState('rejected');
+        return;
+      }
 
-      // Write re-sight event to mock DB
-      await addCatchRecord(
-        currentUser.uid,
-        currentUser.displayName,
-        {
-          nickname: matchedCat.nickname,
-          photoURL: capturedPhoto,
-          breedGuess: matchedCat.breedGuess,
-          distinguishingFeatures: matchedCat.distinguishingFeatures,
-          rarity: matchedCat.rarity,
-          lat,
-          lng,
-        },
-        5,
-        false
-      );
+      if (res.action === 'resight') {
+        const matchedCat = existingCats.find(c => c.id === res.matchedCatId);
+        setResolvedCatch({
+          id: res.matchedCatId,
+          rarity: matchedCat ? matchedCat.rarity : 'common',
+          nickname: res.nickname || (matchedCat ? matchedCat.nickname : 'Unknown'),
+          breedGuess: res.breedGuess || 'Domestic Shorthair',
+          xpGained: res.xpAwarded || 5,
+          distinguishingFeatures: res.distinguishingFeatures || '',
+        });
+        setScanState('resight');
+        return;
+      }
 
-      setScanState('resight');
-      return;
+      if (res.action === 'catch') {
+        const result = await addCatchRecord(
+          currentUser.uid,
+          currentUser.displayName,
+          {
+            nickname: res.suggestedNickname || 'Unknown',
+            photoURL: capturedPhoto,
+            breedGuess: res.breedGuess || 'Domestic Shorthair',
+            distinguishingFeatures: res.distinguishingFeatures || '',
+            rarity: res.rarity || 'common',
+            lat,
+            lng,
+          },
+          res.xpAwarded || 10,
+          false
+        );
+
+        setResolvedCatch({
+          id: result.catchId,
+          rarity: res.rarity || 'common',
+          nickname: res.suggestedNickname || 'Unknown',
+          breedGuess: res.breedGuess || 'Domestic Shorthair',
+          xpGained: res.xpAwarded || 10,
+          distinguishingFeatures: res.distinguishingFeatures || '',
+        });
+
+        if (res.flaggedLocationReuse) {
+          setLocationReuseWarning(true);
+        }
+
+        setScanState('success');
+        return;
+      }
+    } catch (e: any) {
+      console.error("API error during catch analysis:", e);
+      setRejectionMessage("Failed to communicate with AI verification server.");
+      setScanState('rejected');
     }
-
-    // Default to New Catch
-    const rolledRarity = detectedRarity;
-    const xpWeights = { common: 10, uncommon: 25, rare: 60, epic: 150, legendary: 400 };
-    const xp = xpWeights[rolledRarity];
-    const nameList = MOCK_NAMES[rolledRarity];
-    const nickname = nameList[Math.floor(Math.random() * nameList.length)];
-    const breed = MOCK_BREEDS[rolledRarity];
-    const features = `Beautiful ${rolledRarity} cat spotted around geographic coordinates. Features sleek fur patches and attentive posture.`;
-
-    // Save Catch Record to DB
-    const result = await addCatchRecord(
-      currentUser.uid,
-      currentUser.displayName,
-      {
-        nickname,
-        photoURL: capturedPhoto,
-        breedGuess: breed,
-        distinguishingFeatures: features,
-        rarity: rolledRarity,
-        lat,
-        lng,
-      },
-      xp,
-      false
-    );
-
-    setResolvedCatch({
-      id: result.catchId,
-      rarity: rolledRarity,
-      nickname,
-      breedGuess: breed,
-      xpGained: xp,
-      distinguishingFeatures: features,
-    });
-
-    setScanState('success');
   };
 
   const handleDone = () => {
@@ -307,13 +261,20 @@ export const SpotTab: React.FC<SpotTabProps> = ({
     }
     setCapturedPhoto(null);
     setResolvedCatch(null);
+    setRejectionMessage('');
+    setLocationReuseWarning(false);
     startCamera();
   };
 
   return (
-    <div className={`flex-1 flex flex-col items-center justify-between w-full max-w-md mx-auto relative overflow-hidden bg-slate-950 text-white rounded-3xl border-4 shadow-2xl h-[70vh] min-h-[500px] transition-all duration-300 ${
-      triggerShake ? 'animate-shake border-danger' : 'border-slate-900'
-    }`}>
+    <div className="flex-1 flex flex-col items-center justify-between w-full max-w-md mx-auto relative overflow-hidden bg-slate-950 text-white rounded-3xl border-4 border-slate-900 shadow-2xl h-[70vh] min-h-[500px]">
+      
+      {locationReuseWarning && (
+        <div className="absolute top-16 left-4 right-4 z-40 bg-amber-500/95 text-slate-950 px-3 py-2 rounded-xl text-[10px] font-sans font-bold flex items-start gap-2 shadow-lg border border-amber-400 select-none animate-bounce">
+          <Info className="w-4 h-4 shrink-0 mt-0.5 animate-pulse" />
+          <span>Looks like you've caught a lot here — try exploring a new spot! (XP capped at 5)</span>
+        </div>
+      )}
       
       {/* Top camera overlay bar */}
       <div className="absolute top-4 left-4 right-4 z-10 flex justify-between items-center select-none">
@@ -379,54 +340,6 @@ export const SpotTab: React.FC<SpotTabProps> = ({
           </div>
         )}
 
-        {/* Simulated AI Target Bounding Box & HUD */}
-        {scanState === 'streaming' && (
-          <div className="absolute inset-0 z-20 pointer-events-none flex flex-col items-center justify-between p-6">
-            {/* Top scanning state display */}
-            <div className={`mt-14 px-4 py-1.5 rounded-full border text-[9px] font-mono tracking-widest uppercase transition-all duration-300 backdrop-blur-sm select-none ${
-              catDetected 
-                ? 'bg-emerald-950/85 border-emerald-500 text-emerald-400 font-extrabold animate-pulse' 
-                : 'bg-rose-950/85 border-rose-500 text-rose-400 font-bold'
-            }`}>
-              {catDetected ? `🟢 CAT DETECTED: ${detectedRarity.toUpperCase()}` : '🔴 NO CAT DETECTED'}
-            </div>
-
-            {/* Bounding box target */}
-            {catDetected && (
-              <div className="w-48 h-48 relative flex items-center justify-center">
-                {/* Green corner brackets */}
-                <div className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-emerald-400 rounded-tl-lg"></div>
-                <div className="absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 border-emerald-400 rounded-tr-lg"></div>
-                <div className="absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 border-emerald-400 rounded-bl-lg"></div>
-                <div className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-emerald-400 rounded-br-lg"></div>
-                
-                {/* Green pulsing target indicator */}
-                <div className="w-12 h-12 rounded-full border-2 border-emerald-400/40 bg-emerald-500/20 flex items-center justify-center animate-ping"></div>
-                <div className="w-3 h-3 rounded-full bg-emerald-400"></div>
-
-                {/* Accuracy percentage */}
-                <span className="absolute bottom-2 text-[8px] font-mono tracking-wider text-emerald-400 bg-emerald-950/70 px-2 py-0.5 rounded font-black border border-emerald-900/40">
-                  CONFIDENCE: 98.7%
-                </span>
-              </div>
-            )}
-
-            {/* Bottom help indicator */}
-            <div className={`text-[8px] font-mono px-3 py-1 rounded-full border transition-colors select-none ${
-              catDetected 
-                ? 'text-emerald-400 bg-emerald-950/60 border-emerald-900/50' 
-                : 'text-rose-400 bg-rose-950/60 border-rose-900/50'
-            }`}>
-              {catDetected ? 'SHUTTER ACTIVE — SCAN DETECT COMPLETED' : 'SEARCHING FOR HEAT SIGS... HOLD STEADY'}
-            </div>
-          </div>
-        )}
-
-        {/* Ambient Full-screen Green Glow Overlay when Cat is detected */}
-        {scanState === 'streaming' && catDetected && (
-          <div className="absolute inset-0 border-[8px] border-emerald-500/20 shadow-[inset_0_0_60px_rgba(16,185,129,0.35)] pointer-events-none z-15 animate-pulse" />
-        )}
-
         {/* Frozen Frame View */}
         {capturedPhoto && (scanState === 'captured' || scanState === 'analyzing' || scanState === 'rejected' || scanState === 'resight') && (
           <div className={`w-full h-full relative ${scanState === 'rejected' ? 'animate-shake border-4 border-danger' : ''}`}>
@@ -454,7 +367,7 @@ export const SpotTab: React.FC<SpotTabProps> = ({
             </div>
             <h3 className="font-display font-black text-lg text-danger tracking-wider uppercase">Capture Disapproved</h3>
             <p className="text-xs text-ink-soft max-w-xs mt-2.5 leading-relaxed">
-              That doesn't look like a real cat caught live — try again.
+              {rejectionMessage || "That doesn't look like a real cat caught live — try again."}
             </p>
             <button
               onClick={handleRetake}

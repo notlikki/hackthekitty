@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { getAppConfig, saveAppConfig, type AppConfig } from '../services/config';
 import { initFirebase, checkIsFirebaseLive } from '../services/firebase';
-import { Database, Info, Settings, Sparkles, Check, RefreshCw } from 'lucide-react';
+import { Database, Info, Settings, Check, RefreshCw } from 'lucide-react';
 
 interface SetupModalProps {
   isOpen: boolean;
@@ -25,17 +25,13 @@ export const SetupModal: React.FC<SetupModalProps> = ({ isOpen, onClose, onConfi
   if (!isOpen) return null;
 
   const handleChange = (field: string, value: string) => {
-    if (field === 'geminiApiKey') {
-      setConfig((prev) => ({ ...prev, geminiApiKey: value }));
-    } else {
-      setConfig((prev) => ({
-        ...prev,
-        firebaseConfig: {
-          ...prev.firebaseConfig,
-          [field]: value,
-        },
-      }));
-    }
+    setConfig((prev) => ({
+      ...prev,
+      firebaseConfig: {
+        ...prev.firebaseConfig,
+        [field]: value,
+      },
+    }));
   };
 
   const handleSave = () => {
@@ -52,7 +48,6 @@ export const SetupModal: React.FC<SetupModalProps> = ({ isOpen, onClose, onConfi
 
   const handleClear = () => {
     const emptyConfig: AppConfig = {
-      geminiApiKey: '',
       firebaseConfig: {
         apiKey: '',
         authDomain: '',
@@ -107,27 +102,6 @@ export const SetupModal: React.FC<SetupModalProps> = ({ isOpen, onClose, onConfi
             </div>
           </div>
 
-          {/* Gemini Settings */}
-          <div className="space-y-3">
-            <div className="flex items-center gap-2 text-dex-dark font-bold text-base">
-              <Sparkles className="w-5 h-5 text-dex-yellow fill-dex-yellow" />
-              <h3>Gemini API Key</h3>
-            </div>
-            <div>
-              <input
-                type="password"
-                placeholder="AIzaSy..."
-                value={config.geminiApiKey}
-                onChange={(e) => handleChange('geminiApiKey', e.target.value)}
-                className="w-full px-4 py-2 bg-white/70 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 text-sm font-mono"
-              />
-              <p className="text-xs text-slate-500 mt-1.5 flex items-center gap-1">
-                <Info className="w-3.5 h-3.5 shrink-0" />
-                <span>Get a free key from <a href="https://aistudio.google.com/" target="_blank" rel="noreferrer" className="text-blue-600 font-semibold underline">Google AI Studio</a></span>
-              </p>
-            </div>
-          </div>
-
           {/* Firebase Settings */}
           <div className="space-y-3 pt-2 border-t border-slate-200">
             <div className="flex items-center gap-2 text-dex-dark font-bold text-base">
@@ -137,6 +111,12 @@ export const SetupModal: React.FC<SetupModalProps> = ({ isOpen, onClose, onConfi
             <p className="text-xs text-slate-500">
               Set these up to save discoveries, sync photos, and display a persistent leaderboard.
             </p>
+            <div className="bg-blue-50/80 border border-blue-200/50 rounded-xl p-3 text-[11px] text-blue-900 flex items-start gap-2 select-none">
+              <Info className="w-4 h-4 text-blue-500 mt-0.5 shrink-0" />
+              <span>
+                <strong>Note:</strong> Firebase configuration entered here is stored locally in this browser only for sandbox/demo convenience, and is not a substitute for proper environment variables in a real deployment.
+              </span>
+            </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-left">
               <div>

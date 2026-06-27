@@ -1,12 +1,12 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { RefreshCw, Sparkles, AlertCircle, Heart, X, Info, Home } from 'lucide-react';
 import { addCatchRecord, addSightingEvent } from '../services/firebase';
+import { feedCat } from '../services/api';
 import type { Cat } from '../services/firebase';
 import { motion, AnimatePresence } from 'framer-motion';
 import { CatchRevealSequence } from './CatchRevealSequence';
 import { ScanLineOverlay } from './ScanLineOverlay';
 import { XPToast } from './XPToast';
-import { MOCK_NAMES, MOCK_BREEDS } from './SpotTab';
 
 interface FeedTabProps {
   currentUser: any;
@@ -42,10 +42,9 @@ export const FeedTab: React.FC<FeedTabProps> = ({
   const [isCameraLive, setIsCameraLive] = useState<boolean>(false);
   const [flashOverlay, setFlashOverlay] = useState<boolean>(false);
 
-  // AI Cat Detector States
-  const [catDetected, setCatDetected] = useState<boolean>(false);
-  const [detectedRarity, setDetectedRarity] = useState<'common' | 'uncommon' | 'rare' | 'epic' | 'legendary'>('common');
-  const [triggerShake, setTriggerShake] = useState<boolean>(false);
+  // Rejection & error states
+  const [rejectionMessage, setRejectionMessage] = useState<string>('');
+  const [adoptedOrgName, setAdoptedOrgName] = useState<string>('');
 
   const [showHeartSuccess, setShowHeartSuccess] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string>('');
@@ -74,31 +73,7 @@ export const FeedTab: React.FC<FeedTabProps> = ({
     }
   }, [isCameraLive, scanState]);
 
-  // Simulated AI Cat Detector loop
-  useEffect(() => {
-    if (scanState !== 'streaming') {
-      setCatDetected(false);
-      return;
-    }
 
-    const interval = setInterval(() => {
-      setCatDetected((prev) => {
-        const next = !prev;
-        if (next) {
-          const rand = Math.random();
-          let rolled: 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary' = 'common';
-          if (rand < 0.02) rolled = 'legendary';
-          else if (rand < 0.12) rolled = 'epic';
-          else if (rand < 0.27) rolled = 'rare';
-          else if (rand < 0.55) rolled = 'uncommon';
-          setDetectedRarity(rolled);
-        }
-        return next;
-      });
-    }, 3500);
-
-    return () => clearInterval(interval);
-  }, [scanState]);
 
   const requestLocation = () => {
     if (navigator.geolocation) {
@@ -151,12 +126,6 @@ export const FeedTab: React.FC<FeedTabProps> = ({
   const handleCapture = () => {
     if (scanState !== 'streaming') return;
 
-    if (!catDetected) {
-      setTriggerShake(true);
-      setTimeout(() => setTriggerShake(false), 350);
-      return;
-    }
-
     setFlashOverlay(true);
     setTimeout(() => setFlashOverlay(false), 250);
 
@@ -184,6 +153,7 @@ export const FeedTab: React.FC<FeedTabProps> = ({
   const handleRetake = () => {
     setCapturedPhoto(null);
     setResolvedCatch(null);
+    setRejectionMessage('');
     startCamera();
   };
 
@@ -191,108 +161,90 @@ export const FeedTab: React.FC<FeedTabProps> = ({
     if (!capturedPhoto) return;
     setScanState('analyzing');
 
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-
     const lat = geolocation ? geolocation.latitude : 40.7128;
     const lng = geolocation ? geolocation.longitude : -74.0060;
 
-    // Simulate outcomes randomly:
-    // 15% validation failure ('reject')
-    // 15% missing bowl / no food context ('nofood')
-    // 10% adopted cat block ('adopted_block')
-    // Else, feed the cat!
-    const rand = Math.random();
-    let outcome = 'feed';
-    if (rand < 0.15) outcome = 'reject';
-    else if (rand < 0.30) outcome = 'nofood';
-    else if (preSelectedCat?.adoptionStatus?.isAdopted || (rand < 0.40 && existingCats.some(c => c.adoptionStatus?.isAdopted))) {
-      outcome = 'adopted_block';
-    }
+    try {
+      const res = await feedCat(capturedPhoto, lat, lng, existingCats, currentUser.uid);
 
-    if (outcome === 'reject') {
-      setScanState('rejected');
-      return;
-    }
+      if (res.success === false) {
+        if (res.action === 'blocked') {
+          const matchedCat = existingCats.find(c => c.id === res.matchedCatId) || preSelectedCat;
+          setAdoptedOrgName(matchedCat?.adoptionStatus?.orgName || 'a shelter');
+          setScanState('adopted_block');
+          return;
+        }
 
-    if (outcome === 'nofood') {
-      setScanState('nofood');
-      return;
-    }
-
-    if (outcome === 'adopted_block') {
-      setScanState('adopted_block');
-      return;
-    }
-
-    // Determine if we feed an existing cat or auto-catch a new one
-    const shouldFeedExisting = preSelectedCat || (existingCats.length > 0 && Math.random() < 0.60);
-
-    if (shouldFeedExisting) {
-      const targetCat = preSelectedCat || existingCats[Math.floor(Math.random() * existingCats.length)];
-      
-      // Safety check for adopted
-      if (targetCat.adoptionStatus?.isAdopted) {
-        setScanState('adopted_block');
+        setRejectionMessage(res.message || 'Verification failed.');
+        if (res.hasFood === false) {
+          setScanState('nofood');
+        } else {
+          setScanState('rejected');
+        }
         return;
       }
 
-      await addSightingEvent(
-        currentUser.uid,
-        targetCat.id,
-        'feed',
-        capturedPhoto,
-        lat,
-        lng,
-        20
-      );
+      if (res.action === 'feed') {
+        const matchedCat = existingCats.find(c => c.id === res.matchedCatId) || preSelectedCat;
+        
+        await addSightingEvent(
+          currentUser.uid,
+          res.matchedCatId || '',
+          'feed',
+          capturedPhoto,
+          lat,
+          lng,
+          res.xpAwarded || 20
+        );
 
-      setToastMessage(`Fed ${targetCat.nickname}! Meal telemetry logged.`);
-      setToastXPEarned(20);
-      setScanState('success');
-      
-      setShowHeartSuccess(true);
-      setTimeout(() => {
-        setShowHeartSuccess(false);
-        setShowXPToast(true);
-      }, 1000);
-      return;
+        setToastMessage(`Fed ${res.nickname || matchedCat?.nickname || 'Stray'}! Meal telemetry logged.`);
+        setToastXPEarned(res.xpAwarded || 20);
+        setScanState('success');
+        
+        setShowHeartSuccess(true);
+        setTimeout(() => {
+          setShowHeartSuccess(false);
+          setShowXPToast(true);
+        }, 1000);
+        return;
+      }
+
+      if (res.action === 'catch_and_feed') {
+        
+        await addCatchRecord(
+          currentUser.uid,
+          currentUser.displayName,
+          {
+            nickname: res.suggestedNickname || 'Stray Eater',
+            photoURL: capturedPhoto,
+            breedGuess: res.breedGuess || 'Domestic Shorthair',
+            distinguishingFeatures: res.distinguishingFeatures || '',
+            rarity: res.rarity || 'common',
+            lat,
+            lng,
+          },
+          res.xpAwarded || 30,
+          true
+        );
+
+        setResolvedCatch({
+          rarity: res.rarity || 'common',
+          nickname: res.suggestedNickname || 'Stray Eater',
+          breedGuess: res.breedGuess || 'Domestic Shorthair',
+          xpGained: res.xpAwarded || 30,
+          distinguishingFeatures: res.distinguishingFeatures || '',
+        });
+
+        setToastMessage(`Auto-Fed ${res.suggestedNickname || 'Stray Eater'}! Discovery logs updated.`);
+        setToastXPEarned(20);
+        setScanState('catch_first');
+        return;
+      }
+    } catch (e: any) {
+      console.error("API error during feed analysis:", e);
+      setRejectionMessage("Failed to communicate with AI verification server.");
+      setScanState('rejected');
     }
-
-    // Auto-catch-then-feed (New discovery cat)
-    const rolledRarity = detectedRarity;
-    const xpWeights = { common: 10, uncommon: 25, rare: 60, epic: 150, legendary: 400 };
-    const discoveryXP = xpWeights[rolledRarity];
-    const nameList = MOCK_NAMES[rolledRarity] || ['Noodle', 'Sprout', 'Mac'];
-    const nickname = nameList[Math.floor(Math.random() * nameList.length)];
-    const breed = MOCK_BREEDS[rolledRarity] || 'Stray Mix';
-    const features = 'Discovered feeding on street-side food bowl. Spunky visual properties.';
-
-    await addCatchRecord(
-      currentUser.uid,
-      currentUser.displayName,
-      {
-        nickname,
-        photoURL: capturedPhoto,
-        breedGuess: breed,
-        distinguishingFeatures: features,
-        rarity: rolledRarity,
-        lat,
-        lng,
-      },
-      discoveryXP + 20,
-      true
-    );
-
-    setResolvedCatch({
-      rarity: rolledRarity,
-      nickname,
-      breedGuess: breed,
-      xpGained: discoveryXP + 20,
-      distinguishingFeatures: features,
-    });
-    setToastMessage(`Auto-Fed ${nickname}! Discovery logs updated.`);
-    setToastXPEarned(20);
-    setScanState('catch_first');
   };
 
   const handleDone = () => {
@@ -302,14 +254,13 @@ export const FeedTab: React.FC<FeedTabProps> = ({
     
     setCapturedPhoto(null);
     setResolvedCatch(null);
+    setRejectionMessage('');
     if (preSelectedCat) onClearPreSelected();
     startCamera();
   };
 
   return (
-    <div className={`flex-1 flex flex-col items-center justify-between w-full max-w-md mx-auto relative overflow-hidden bg-slate-950 text-white rounded-3xl border-4 shadow-2xl h-[70vh] min-h-[500px] transition-all duration-300 ${
-      triggerShake ? 'animate-shake border-danger' : 'border-[#D97706]'
-    }`}>
+    <div className="flex-1 flex flex-col items-center justify-between w-full max-w-md mx-auto relative overflow-hidden bg-slate-950 text-white rounded-3xl border-4 border-[#D97706] shadow-2xl h-[70vh] min-h-[500px]">
       
       {/* Persistent floating notification toast */}
       <XPToast
@@ -380,54 +331,6 @@ export const FeedTab: React.FC<FeedTabProps> = ({
           </div>
         )}
 
-        {/* Simulated AI Target Bounding Box & HUD */}
-        {scanState === 'streaming' && (
-          <div className="absolute inset-0 z-20 pointer-events-none flex flex-col items-center justify-between p-6">
-            {/* Top scanning state display */}
-            <div className={`mt-14 px-4 py-1.5 rounded-full border text-[9px] font-mono tracking-widest uppercase transition-all duration-300 backdrop-blur-sm select-none ${
-              catDetected 
-                ? 'bg-emerald-950/85 border-emerald-500 text-emerald-400 font-extrabold animate-pulse' 
-                : 'bg-rose-950/85 border-rose-500 text-rose-400 font-bold'
-            }`}>
-              {catDetected ? `🟢 CAT DETECTED: ${detectedRarity.toUpperCase()}` : '🔴 NO CAT DETECTED'}
-            </div>
-
-            {/* Bounding box target */}
-            {catDetected && (
-              <div className="w-48 h-48 relative flex items-center justify-center">
-                {/* Green corner brackets */}
-                <div className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-emerald-400 rounded-tl-lg"></div>
-                <div className="absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 border-emerald-400 rounded-tr-lg"></div>
-                <div className="absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 border-emerald-400 rounded-bl-lg"></div>
-                <div className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-emerald-400 rounded-br-lg"></div>
-                
-                {/* Green pulsing target indicator */}
-                <div className="w-12 h-12 rounded-full border-2 border-emerald-400/40 bg-emerald-500/20 flex items-center justify-center animate-ping"></div>
-                <div className="w-3 h-3 rounded-full bg-emerald-400"></div>
-
-                {/* Accuracy percentage */}
-                <span className="absolute bottom-2 text-[8px] font-mono tracking-wider text-emerald-400 bg-emerald-950/70 px-2 py-0.5 rounded font-black border border-emerald-900/40">
-                  FEED LOCK: BOWL FOUND
-                </span>
-              </div>
-            )}
-
-            {/* Bottom help indicator */}
-            <div className={`text-[8px] font-mono px-3 py-1 rounded-full border transition-colors select-none ${
-              catDetected 
-                ? 'text-emerald-400 bg-emerald-950/60 border-emerald-900/50' 
-                : 'text-rose-400 bg-rose-950/60 border-rose-900/50'
-            }`}>
-              {catDetected ? 'FEED AUTHORIZED — PRESS BUTTON TO SERVE' : 'WAITING FOR CAT & BOWL ACQUISITION'}
-            </div>
-          </div>
-        )}
-
-        {/* Ambient Full-screen Green Glow Overlay when Cat is detected */}
-        {scanState === 'streaming' && catDetected && (
-          <div className="absolute inset-0 border-[8px] border-emerald-500/20 shadow-[inset_0_0_60px_rgba(16,185,129,0.35)] pointer-events-none z-15 animate-pulse" />
-        )}
-
         {/* Captured Frozen Image */}
         {capturedPhoto && (scanState === 'captured' || scanState === 'analyzing' || scanState === 'rejected' || scanState === 'nofood' || scanState === 'adopted_block') && (
           <div className={`w-full h-full relative ${scanState === 'rejected' ? 'animate-shake border-4 border-danger' : ''}`}>
@@ -467,7 +370,7 @@ export const FeedTab: React.FC<FeedTabProps> = ({
             </div>
             <h3 className="font-display font-black text-lg text-danger tracking-wider uppercase">Verification Failed</h3>
             <p className="text-xs text-ink-soft max-w-xs mt-2.5 leading-relaxed">
-              That doesn't look like a real cat caught live — try again.
+              {rejectionMessage || "That doesn't look like a real cat caught live — try again."}
             </p>
             <button
               onClick={handleRetake}
@@ -486,7 +389,7 @@ export const FeedTab: React.FC<FeedTabProps> = ({
             </div>
             <h3 className="font-display font-black text-lg text-[#D97706] tracking-wider uppercase">No Food Context</h3>
             <p className="text-xs text-ink-soft max-w-[260px] mt-2.5 leading-normal">
-              We need to see food or a bowl to confirm a feeding — try getting both in frame.
+              {rejectionMessage || "We need to see food or a bowl to confirm a feeding — try getting both in frame."}
             </p>
             <button
               onClick={handleRetake}
@@ -513,7 +416,7 @@ export const FeedTab: React.FC<FeedTabProps> = ({
             </h3>
             
             <p className="text-xs text-ink-soft max-w-[280px] mt-2.5 leading-relaxed font-sans font-medium">
-              <span className="font-extrabold text-ink">{preSelectedCat?.nickname || 'This cat'}</span> has been adopted by <span className="font-extrabold text-ink">{preSelectedCat?.adoptionStatus?.orgName || 'Whiskers Rescue Shelter'}</span> and is safe! No need to feed strays here anymore.
+              <span className="font-extrabold text-ink">{preSelectedCat?.nickname || 'This cat'}</span> has been adopted by <span className="font-extrabold text-ink">{adoptedOrgName || preSelectedCat?.adoptionStatus?.orgName || 'Whiskers Rescue Shelter'}</span> and is safe! No need to feed strays here anymore.
             </p>
 
             <button
